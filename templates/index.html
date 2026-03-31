@@ -186,10 +186,10 @@ async function loadBooks() {
                 <td>${escapeHtml(b.genre || "—")}</td>
                 <td>${b.year ?? "—"}</td>
                 <td class="text-end">
-                    <button class="btn btn-outline-primary btn-action me-1" onclick="editBook(${b.id})" title="Edit">
+                    <button class="btn btn-outline-primary btn-action me-1" onclick="editBook('${b.id}')" title="Edit">
                         <i class="bi bi-pencil"></i>
                     </button>
-                    <button class="btn btn-outline-danger btn-action" onclick="confirmDelete(${b.id}, '${escapeHtml(b.title).replace(/'/g, "\\'")}')" title="Delete">
+                    <button class="btn btn-outline-danger btn-action" onclick="confirmDelete('${b.id}', '${escapeHtml(b.title).replace(/'/g, "\\'")}')" title="Delete">
                         <i class="bi bi-trash"></i>
                     </button>
                 </td>

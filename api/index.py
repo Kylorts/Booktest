@@ -1,36 +1,25 @@
 from flask import Flask, request, jsonify, render_template
-import sqlite3
+from pymongo import MongoClient
+from bson import ObjectId
 import os
 
-app = Flask(__name__)
-DATABASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "books.db")
+app = Flask(__name__, template_folder="../templates")
+
+MONGO_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017/bookdb")
+client = MongoClient(MONGO_URI)
+db = client.get_default_database()
+books_col = db.books
 
 
-def get_db():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
-def init_db():
-    conn = get_db()
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS books (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            author TEXT NOT NULL,
-            genre TEXT DEFAULT '',
-            year INTEGER
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
-
-
-init_db()
+def serialize_book(book):
+    """Convert MongoDB document to JSON-serializable dict."""
+    return {
+        "id": str(book["_id"]),
+        "title": book["title"],
+        "author": book["author"],
+        "genre": book.get("genre", ""),
+        "year": book.get("year"),
+    }
 
 
 # ── Frontend ──────────────────────────────────────────────────────────
@@ -46,20 +35,18 @@ def index():
 
 @app.route("/api/books", methods=["GET"])
 def get_books():
-    conn = get_db()
-    books = conn.execute("SELECT * FROM books ORDER BY id DESC").fetchall()
-    conn.close()
-    return jsonify([dict(b) for b in books])
+    books = books_col.find().sort("_id", -1)
+    return jsonify([serialize_book(b) for b in books])
 
 
-@app.route("/api/books/<int:book_id>", methods=["GET"])
+@app.route("/api/books/<book_id>", methods=["GET"])
 def get_book(book_id):
-    conn = get_db()
-    book = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
-    conn.close()
+    if not ObjectId.is_valid(book_id):
+        return jsonify({"error": "Book not found"}), 404
+    book = books_col.find_one({"_id": ObjectId(book_id)})
     if book is None:
         return jsonify({"error": "Book not found"}), 404
-    return jsonify(dict(book))
+    return jsonify(serialize_book(book))
 
 
 @app.route("/api/books", methods=["POST"])
@@ -91,29 +78,23 @@ def create_book():
     if errors:
         return jsonify({"error": " ".join(errors)}), 400
 
-    conn = get_db()
-    cursor = conn.execute(
-        "INSERT INTO books (title, author, genre, year) VALUES (?, ?, ?, ?)",
-        (title, author, genre, year),
-    )
-    conn.commit()
-    book_id = cursor.lastrowid
-    book = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
-    conn.close()
-    return jsonify(dict(book)), 201
+    doc = {"title": title, "author": author, "genre": genre, "year": year}
+    result = books_col.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    return jsonify(serialize_book(doc)), 201
 
 
-@app.route("/api/books/<int:book_id>", methods=["PUT"])
+@app.route("/api/books/<book_id>", methods=["PUT"])
 def update_book(book_id):
-    conn = get_db()
-    existing = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
+    if not ObjectId.is_valid(book_id):
+        return jsonify({"error": "Book not found"}), 404
+
+    existing = books_col.find_one({"_id": ObjectId(book_id)})
     if existing is None:
-        conn.close()
         return jsonify({"error": "Book not found"}), 404
 
     data = request.get_json(silent=True)
     if not data:
-        conn.close()
         return jsonify({"error": "Request body must be JSON"}), 400
 
     title = (data.get("title") or "").strip()
@@ -137,31 +118,22 @@ def update_book(book_id):
         year = None
 
     if errors:
-        conn.close()
         return jsonify({"error": " ".join(errors)}), 400
 
-    conn.execute(
-        "UPDATE books SET title = ?, author = ?, genre = ?, year = ? WHERE id = ?",
-        (title, author, genre, year, book_id),
+    books_col.update_one(
+        {"_id": ObjectId(book_id)},
+        {"$set": {"title": title, "author": author, "genre": genre, "year": year}},
     )
-    conn.commit()
-    book = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
-    conn.close()
-    return jsonify(dict(book))
+    updated = books_col.find_one({"_id": ObjectId(book_id)})
+    return jsonify(serialize_book(updated))
 
 
-@app.route("/api/books/<int:book_id>", methods=["DELETE"])
+@app.route("/api/books/<book_id>", methods=["DELETE"])
 def delete_book(book_id):
-    conn = get_db()
-    existing = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
-    if existing is None:
-        conn.close()
+    if not ObjectId.is_valid(book_id):
         return jsonify({"error": "Book not found"}), 404
-    conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
-    conn.commit()
-    conn.close()
+
+    result = books_col.delete_one({"_id": ObjectId(book_id)})
+    if result.deleted_count == 0:
+        return jsonify({"error": "Book not found"}), 404
     return jsonify({"message": "Book deleted successfully"})
-
-
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
