@@ -5,9 +5,9 @@ import os
 
 app = Flask(__name__, template_folder="../templates")
 
-MONGO_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017/bookdb")
+MONGO_URI = os.environ.get("MONGODB_URI")
 client = MongoClient(MONGO_URI)
-db = client.get_default_database()
+db = client['bookdb']
 books_col = db.books
 
 
